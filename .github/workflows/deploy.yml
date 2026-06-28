@@ -15,7 +15,7 @@ env:
   ECR_REPOSITORY: poc-ecs
   ECS_CLUSTER: poc-ecs-cluster
   ECS_SERVICE: poc-ecs-service
-  CONTAINER_NAME: poc-ecs-container
+  CONTAINER_NAME: app
 
 jobs:
   build-and-deploy:
