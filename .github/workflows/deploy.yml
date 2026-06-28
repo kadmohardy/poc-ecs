@@ -12,10 +12,10 @@ on:
 
 env:
   AWS_REGION: eu-west-2
-  ECR_REPOSITORY: attendance-app-dev  
-  ECS_CLUSTER: attendance-app-dev-cluster
-  ECS_SERVICE: attendance-app-dev-service
-  CONTAINER_NAME: attendance-app-container
+  ECR_REPOSITORY: poc-ecs
+  ECS_CLUSTER: poc-ecs-cluster
+  ECS_SERVICE: poc-ecs-service
+  CONTAINER_NAME: poc-ecs-container
 
 jobs:
   build-and-deploy:
