@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       task_revision:
-        description: 'Task definition revision to rollback to'
+        description: "Task definition revision to rollback to (e.g. 17)"
         required: true
         type: string
 
@@ -12,11 +12,13 @@ env:
   AWS_REGION: us-east-1
   ECS_CLUSTER: poc-ecs-cluster
   ECS_SERVICE: poc-ecs-service
+  TASK_FAMILY: poc-ecs
 
 jobs:
   rollback:
-    name: Rollback to Previous Version
+    name: Rollback ECS Service
     runs-on: ubuntu-latest
+
     permissions:
       id-token: write
       contents: read
@@ -28,12 +30,32 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Rollback to specified revision
+      - name: Validate task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition ${{ env.TASK_FAMILY }}:${{ inputs.task_revision }} \
+            >/dev/null
+
+      - name: Get current task definition
+        id: current
+        run: |
+          CURRENT_TASK=$(aws ecs describe-services \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --services ${{ env.ECS_SERVICE }} \
+            --query 'services[0].taskDefinition' \
+            --output text)
+
+          CURRENT_REVISION=${CURRENT_TASK##*:}
+
+          echo "task_definition=$CURRENT_TASK" >> $GITHUB_OUTPUT
+          echo "revision=$CURRENT_REVISION" >> $GITHUB_OUTPUT
+
+      - name: Rollback ECS Service
         run: |
           aws ecs update-service \
             --cluster ${{ env.ECS_CLUSTER }} \
             --service ${{ env.ECS_SERVICE }} \
-            --task-definition poc-ecs:${{ inputs.task_revision }} \
+            --task-definition ${{ env.TASK_FAMILY }}:${{ inputs.task_revision }} \
             --force-new-deployment
 
       - name: Wait for service stability
@@ -46,7 +68,8 @@ jobs:
         run: |
           echo "### ⏪ Rollback Successful" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Rolled back to revision:** ${{ inputs.task_revision }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Previous Revision:** ${{ steps.current.outputs.revision }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Current Revision:** ${{ inputs.task_revision }}" >> $GITHUB_STEP_SUMMARY
           echo "**Cluster:** ${{ env.ECS_CLUSTER }}" >> $GITHUB_STEP_SUMMARY
           echo "**Service:** ${{ env.ECS_SERVICE }}" >> $GITHUB_STEP_SUMMARY
           echo "**Triggered by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY

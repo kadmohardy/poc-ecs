@@ -39,22 +39,20 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
       
-      - name: Build, tag, push image to Amazon ECR
+      - name: Build, tag and push image to Amazon ECR
         id: build-image
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
+            ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          # Build Docker image
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest  
+            IMAGE_TAG=$(echo $GITHUB_SHA | cut -c1-8)
 
-          # Push both tags
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+            docker build \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
 
-          # Output image URI for deployment
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+            docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+            echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+            echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
 
       - name: Download task definition
         run: |
@@ -70,6 +68,20 @@ jobs:
           container-name: ${{ env.CONTAINER_NAME }}
           image: ${{ steps.build-image.outputs.image }}
 
+      - name: Get current task definition
+        id: current-task
+        run: |
+            TASK_DEF=$(aws ecs describe-services \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --services ${{ env.ECS_SERVICE }} \
+            --query 'services[0].taskDefinition' \
+            --output text)
+
+            REVISION=${TASK_DEF##*:}
+
+            echo "task_definition=$TASK_DEF" >> $GITHUB_OUTPUT
+            echo "revision=$REVISION" >> $GITHUB_OUTPUT
+
       - name: Deploy to Amazon ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v1
         with:
@@ -78,11 +90,26 @@ jobs:
           cluster: ${{ env.ECS_CLUSTER }}
           wait-for-service-stability: true
 
+      - name: Get deployed task definition
+        id: deployed-task
+        run: |
+            TASK_DEF=$(aws ecs describe-services \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --services ${{ env.ECS_SERVICE }} \
+            --query 'services[0].taskDefinition' \
+            --output text)
+
+            REVISION=${TASK_DEF##*:}
+
+            echo "task_definition=$TASK_DEF" >> $GITHUB_OUTPUT
+            echo "revision=$REVISION" >> $GITHUB_OUTPUT
       - name: Deployment Summary
         run: |
           echo "### 🚀 Deployment Successful!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Image:** ${{ steps.build-image.outputs.image }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Previous Revision:** ${{ steps.current-task.outputs.revision }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Current Revision:** ${{ steps.deployed-task.outputs.revision }}" >> $GITHUB_STEP_SUMMARY
           echo "**Cluster:** ${{ env.ECS_CLUSTER }}" >> $GITHUB_STEP_SUMMARY
           echo "**Service:** ${{ env.ECS_SERVICE }}" >> $GITHUB_STEP_SUMMARY
           echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
