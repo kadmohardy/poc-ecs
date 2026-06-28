@@ -16,7 +16,7 @@ type InitiateRequest struct {
 }
 
 func PixInitiate(w http.ResponseWriter, r *http.Request) {
-	print("TESTANDO TUDO AQUI")
+	print("TESTANDO TUDO AQUI 222")
 	tracer := otel.Tracer("pix")
 
 	_, span := tracer.Start(
