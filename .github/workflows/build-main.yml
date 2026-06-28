@@ -1,0 +1,72 @@
+name: Build Image
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: poc-ecs
+  ECS_CLUSTER: poc-ecs-cluster
+  ECS_SERVICE: poc-ecs-service
+  CONTAINER_NAME: app
+
+jobs:
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+    
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Build, tag and push image to Amazon ECR
+        id: build-image
+        env:
+            ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+            IMAGE_TAG=$(git rev-parse --short=8 HEAD)
+            COMMIT=$(git rev-parse HEAD)
+            BRANCH=$(git branch --show-current)
+            IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+            DIGEST=$(aws ecr describe-images \
+            --repository-name $ECR_REPOSITORY \
+            --image-ids imageTag=$IMAGE_TAG \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)
+
+            docker build \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+
+            docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+            echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+            echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+            echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+            echo "commit=$COMMIT" >> $GITHUB_OUTPUT
+            echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+            echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+            
+      - name: Build Summary
+        run: |
+          echo "### 🚀 Build Successful!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** ${{ steps.build-image.outputs.branch }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ steps.build-image.outputs.commit }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** ${{ steps.build-image.outputs.image }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag:** ${{ steps.build-image.outputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Digest:** ${{ steps.build-image.outputs.digest }}" >> $GITHUB_STEP_SUMMARY

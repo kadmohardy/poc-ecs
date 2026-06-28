@@ -1,0 +1,123 @@
+name: Build and Deploy to ECS
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to deploy"
+        required: true
+        default: "main"
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: poc-ecs
+  ECS_CLUSTER: poc-ecs-cluster
+  ECS_SERVICE: poc-ecs-service
+  CONTAINER_NAME: app
+
+jobs:
+  build-and-deploy:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout selected branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+            
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+    
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Build, tag and push image to Amazon ECR
+        id: build-image
+        env:
+            ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+            IMAGE_TAG=$(git rev-parse --short=8 HEAD)
+            COMMIT=$(git rev-parse HEAD)
+            BRANCH=$(git branch --show-current)
+
+            docker build \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+
+            docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+            echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+            echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+            echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+            echo "commit=$COMMIT" >> $GITHUB_OUTPUT
+
+      - name: Download task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition poc-ecs-task \
+            --query taskDefinition > task-definition.json
+      
+      - name: Update ECS task definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with: 
+          task-definition: task-definition.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.build-image.outputs.image }}
+
+      - name: Get current task definition
+        id: current-task
+        run: |
+            TASK_DEF=$(aws ecs describe-services \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --services ${{ env.ECS_SERVICE }} \
+            --query 'services[0].taskDefinition' \
+            --output text)
+
+            REVISION=${TASK_DEF##*:}
+
+            echo "task_definition=$TASK_DEF" >> $GITHUB_OUTPUT
+            echo "revision=$REVISION" >> $GITHUB_OUTPUT
+
+      - name: Deploy to Amazon ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      - name: Get deployed task definition
+        id: deployed-task
+        run: |
+            TASK_DEF=$(aws ecs describe-services \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --services ${{ env.ECS_SERVICE }} \
+            --query 'services[0].taskDefinition' \
+            --output text)
+
+            REVISION=${TASK_DEF##*:}
+
+            echo "task_definition=$TASK_DEF" >> $GITHUB_OUTPUT
+            echo "revision=$REVISION" >> $GITHUB_OUTPUT
+
+      - name: Deployment Summary
+        run: |
+          echo "### 🚀 Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** ${{ steps.build-image.outputs.image }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** ${{ steps.build-image.outputs.branch }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ steps.build-image.outputs.commit }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** ${{ steps.build-image.outputs.image }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Previous Revision:** ${{ steps.current-task.outputs.revision }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Current Revision:** ${{ steps.deployed-task.outputs.revision }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Cluster:** ${{ env.ECS_CLUSTER }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Service:** ${{ env.ECS_SERVICE }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Task Definition:** ${{ steps.deployed-task.outputs.task_definition }}" >> $GITHUB_STEP_SUMMARY
