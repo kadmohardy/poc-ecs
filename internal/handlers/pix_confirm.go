@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"time"
 
@@ -29,12 +30,12 @@ func (h *PixHandler) PixConfirm(w http.ResponseWriter, r *http.Request) {
 
 	// Busca o traceparent salvo na iniciação
 	traceparent, ok := h.TraceRepository.Get(req.EndToEndID)
-
 	if !ok {
 		http.Error(w, "trace context not found", http.StatusNotFound)
 		return
 	}
 
+	log.Printf("[PIX CONFIRM] TraceParent=%s", traceparent)
 	// Reconstrói o contexto do trace
 	carrier := propagation.MapCarrier{
 		"traceparent": traceparent,
@@ -45,11 +46,26 @@ func (h *PixHandler) PixConfirm(w http.ResponseWriter, r *http.Request) {
 		carrier,
 	)
 
+	spanCtx := trace.SpanContextFromContext(ctx)
+
+	log.Printf("[PIX CONFIRM] Extracted TraceID=%s SpanID=%s",
+		spanCtx.TraceID().String(),
+		spanCtx.SpanID().String(),
+	)
+
 	tracer := otel.Tracer("pix")
 
 	ctx, span := tracer.Start(
 		ctx,
 		"pix.confirm",
+	)
+
+	spanCtx = span.SpanContext()
+
+	log.Printf(
+		"[PIX CONFIRM] New Span TraceID=%s SpanID=%s",
+		spanCtx.TraceID().String(),
+		spanCtx.SpanID().String(),
 	)
 
 	defer span.End()
@@ -67,6 +83,11 @@ func (h *PixHandler) PixConfirm(w http.ResponseWriter, r *http.Request) {
 		metric.WithAttributes(
 			attribute.String("flow", "pix"),
 		),
+	)
+
+	log.Printf(
+		"[PIX CONFIRM] Duration=%dms",
+		duration.Milliseconds(),
 	)
 
 	span.SetAttributes(
@@ -94,8 +115,18 @@ func (h *PixHandler) PixConfirm(w http.ResponseWriter, r *http.Request) {
 		),
 	)
 
+	log.Printf(
+		"[PIX CONFIRM] Removing TraceContext EndToEndID=%s",
+		req.EndToEndID,
+	)
+
 	// Limpa o contexto da memória
 	h.TraceRepository.Delete(
+		req.EndToEndID,
+	)
+
+	log.Printf(
+		"[PIX CONFIRM] Pix confirmado EndToEndID=%s",
 		req.EndToEndID,
 	)
 

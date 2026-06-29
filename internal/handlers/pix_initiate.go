@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 
 	"poc-ecs/internal/infra"
@@ -35,10 +36,7 @@ func (h *PixHandler) PixInitiate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	span.SetAttributes(attribute.String(
-		"pix.end_to_end_id",
-		req.EndToEndID,
-	), attribute.String(
+	span.SetAttributes(attribute.String("pix.end_to_end_id", req.EndToEndID), attribute.String(
 		"pix.phase",
 		"initiate",
 	),
@@ -52,6 +50,8 @@ func (h *PixHandler) PixInitiate(w http.ResponseWriter, r *http.Request) {
 		carrier,
 	)
 
+	log.Printf("[PIX INIT] TraceParent=%s", carrier["traceparent"])
+
 	// Persiste para uso futuro pela Lambda
 	if err := h.TraceRepository.Save(req.EndToEndID, carrier["traceparent"]); err != nil {
 		span.RecordError(err)
@@ -59,6 +59,8 @@ func (h *PixHandler) PixInitiate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	log.Printf("[PIX INIT] Saved TraceParent for EndToEndID=%s", req.EndToEndID)
 
 	// // TODO:
 	// // Publicar mensagem no SQS
@@ -69,6 +71,7 @@ func (h *PixHandler) PixInitiate(w http.ResponseWriter, r *http.Request) {
 	// 	},
 	// )
 
+	log.Printf("[PIX INIT] Pix iniciado EndToEndID=%s", req.EndToEndID)
 	span.AddEvent("pix initiated")
 
 	w.WriteHeader(http.StatusAccepted)
