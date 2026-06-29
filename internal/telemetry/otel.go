@@ -9,6 +9,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/propagation"
 
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
@@ -67,6 +68,13 @@ func Init(ctx context.Context) (*Telemetry, error) {
 	)
 
 	otel.SetTracerProvider(tracerProvider)
+
+	otel.SetTextMapPropagator(
+		propagation.NewCompositeTextMapPropagator(
+			propagation.TraceContext{},
+			propagation.Baggage{},
+		),
+	)
 
 	metricExporter, err := otlpmetricgrpc.New(
 		ctx,
