@@ -1,31 +1,26 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"log"
 	"net/http"
-	"poc-ecs/internal/telemetry"
 	"time"
+
+	"poc-ecs/internal/telemetry"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 )
 
 type ConfirmRequest struct {
-	ID string `json:"id"`
+	EndToEndID string `json:"endToEndId"`
 }
 
-func PixConfirm(w http.ResponseWriter, r *http.Request) {
-	tracer := otel.Tracer("pix")
-
-	ctx, span := tracer.Start(
-		r.Context(),
-		"pix.confirm",
-	)
-
-	defer span.End()
-
+func (h *PixHandler) PixConfirm(w http.ResponseWriter, r *http.Request) {
 	var req ConfirmRequest
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -33,14 +28,54 @@ func PixConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	startedAt, ok := Transactions[req.ID]
-
+	// Busca o traceparent salvo na iniciação
+	traceparent, ok := h.TraceRepository.Get(req.EndToEndID)
 	if !ok {
-		http.Error(w, "transaction not found", http.StatusNotFound)
+		http.Error(w, "trace context not found", http.StatusNotFound)
 		return
 	}
 
-	duration := time.Since(startedAt)
+	log.Printf("[PIX CONFIRM] TraceParent=%s", traceparent)
+	// Reconstrói o contexto do trace
+	carrier := propagation.MapCarrier{
+		"traceparent": traceparent,
+	}
+
+	ctx := otel.GetTextMapPropagator().Extract(
+		context.Background(),
+		carrier,
+	)
+
+	spanCtx := trace.SpanContextFromContext(ctx)
+
+	log.Printf("[PIX CONFIRM] Extracted TraceID=%s SpanID=%s",
+		spanCtx.TraceID().String(),
+		spanCtx.SpanID().String(),
+	)
+
+	tracer := otel.Tracer("pix")
+
+	ctx, span := tracer.Start(
+		ctx,
+		"pix.confirm",
+	)
+
+	spanCtx = span.SpanContext()
+
+	log.Printf(
+		"[PIX CONFIRM] New Span TraceID=%s SpanID=%s",
+		spanCtx.TraceID().String(),
+		spanCtx.SpanID().String(),
+	)
+
+	defer span.End()
+
+	// Simula o processamento que depois será feito pela Lambda
+	start := time.Now()
+
+	time.Sleep(800 * time.Millisecond)
+
+	duration := time.Since(start)
 
 	telemetry.PixDuration.Record(
 		ctx,
@@ -50,9 +85,20 @@ func PixConfirm(w http.ResponseWriter, r *http.Request) {
 		),
 	)
 
+	log.Printf(
+		"[PIX CONFIRM] Duration=%dms",
+		duration.Milliseconds(),
+	)
+
 	span.SetAttributes(
-		attribute.String("pix.id", req.ID),
-		attribute.String("pix.phase", "confirm"),
+		attribute.String(
+			"pix.end_to_end_id",
+			req.EndToEndID,
+		),
+		attribute.String(
+			"pix.phase",
+			"confirm",
+		),
 		attribute.Int64(
 			"pix.duration_ms",
 			duration.Milliseconds(),
@@ -69,9 +115,24 @@ func PixConfirm(w http.ResponseWriter, r *http.Request) {
 		),
 	)
 
-	delete(Transactions, req.ID)
+	log.Printf(
+		"[PIX CONFIRM] Removing TraceContext EndToEndID=%s",
+		req.EndToEndID,
+	)
+
+	// Limpa o contexto da memória
+	h.TraceRepository.Delete(
+		req.EndToEndID,
+	)
+
+	log.Printf(
+		"[PIX CONFIRM] Pix confirmado EndToEndID=%s",
+		req.EndToEndID,
+	)
 
 	w.WriteHeader(http.StatusOK)
 
-	_, _ = w.Write([]byte("confirmed"))
+	_, _ = w.Write(
+		[]byte("confirmed"),
+	)
 }
