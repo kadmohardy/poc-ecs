@@ -73,8 +73,6 @@ func (h *PixHandler) PixConfirm(w http.ResponseWriter, r *http.Request) {
 	// Simula o processamento que depois será feito pela Lambda
 	start := time.Now()
 
-	time.Sleep(800 * time.Millisecond)
-
 	duration := time.Since(start)
 
 	telemetry.PixDuration.Record(
@@ -85,10 +83,7 @@ func (h *PixHandler) PixConfirm(w http.ResponseWriter, r *http.Request) {
 		),
 	)
 
-	log.Printf(
-		"[PIX CONFIRM] Duration=%dms",
-		duration.Milliseconds(),
-	)
+	log.Printf("[PIX CONFIRM] Duration=%dms", duration.Milliseconds())
 
 	span.SetAttributes(
 		attribute.String(
@@ -99,10 +94,7 @@ func (h *PixHandler) PixConfirm(w http.ResponseWriter, r *http.Request) {
 			"pix.phase",
 			"confirm",
 		),
-		attribute.Int64(
-			"pix.duration_ms",
-			duration.Milliseconds(),
-		),
+		attribute.String("pix.confirmed_at", time.Now().UTC().Format(time.RFC3339)),
 	)
 
 	span.AddEvent(
