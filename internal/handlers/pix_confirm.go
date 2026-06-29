@@ -99,6 +99,7 @@ func (h *PixHandler) PixConfirm(w http.ResponseWriter, r *http.Request) {
 			"pix.phase",
 			"confirm",
 		),
+		attribute.String("pix.started_at", time.Now().UTC().Format(time.RFC3339)),
 		attribute.Int64(
 			"pix.duration_ms",
 			duration.Milliseconds(),

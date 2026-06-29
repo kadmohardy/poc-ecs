@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"time"
 
 	"poc-ecs/internal/infra"
 	"poc-ecs/internal/queue"
@@ -36,10 +37,9 @@ func (h *PixHandler) PixInitiate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	span.SetAttributes(attribute.String("pix.end_to_end_id", req.EndToEndID), attribute.String(
-		"pix.phase",
-		"initiate",
-	),
+	span.SetAttributes(attribute.String("pix.end_to_end_id", req.EndToEndID),
+		attribute.String("pix.phase", "initiate"),
+		attribute.String("pix.started_at", time.Now().UTC().Format(time.RFC3339)),
 	)
 
 	// Cria o traceparent
