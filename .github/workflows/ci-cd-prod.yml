@@ -1,0 +1,193 @@
+name: Release to Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image Tag (ex: f22bf653)"
+        required: true
+        type: string
+
+      version:
+        description: "Semantic Version (ex: 1.2.0)"
+        required: true
+        type: string
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: poc-ecs
+  ECS_CLUSTER: poc-ecs-prod-cluster
+  ECS_SERVICE: poc-ecs-prod-service
+  TASK_DEFINITION: poc-ecs-task
+  CONTAINER_NAME: app
+
+jobs:
+
+  build:
+    name: Build Release
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: write
+
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+
+    steps:
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Validate Semantic Version
+        run: |
+          if ! [[ "${{ inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid Semantic Version."
+            exit 1
+          fi
+
+      - name: Validate GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view v${{ inputs.version }} >/dev/null 2>&1; then
+            echo "Release v${{ inputs.version }} already exists."
+            exit 1
+          fi
+
+      - name: Validate Image
+        run: |
+          aws ecr describe-images \
+            --repository-name $ECR_REPOSITORY \
+            --image-ids imageTag=${{ inputs.image_tag }}
+
+      - name: Get Image Manifest
+        id: manifest
+        run: |
+          MANIFEST=$(aws ecr batch-get-image \
+            --repository-name $ECR_REPOSITORY \
+            --image-ids imageTag=${{ inputs.image_tag }} \
+            --query 'images[0].imageManifest' \
+            --output text)
+
+          echo "manifest<<EOF" >> $GITHUB_OUTPUT
+          echo "$MANIFEST" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create Semantic Version Tag
+        run: |
+          aws ecr put-image \
+            --repository-name $ECR_REPOSITORY \
+            --image-tag v${{ inputs.version }} \
+            --image-manifest '${{ steps.manifest.outputs.manifest }}'
+
+      - name: Build Summary
+        run: |
+          echo "## ✅ Build concluído" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Imagem preparada para deploy:" >> $GITHUB_STEP_SUMMARY
+          echo "\`${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:v${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+
+  deploy:
+    name: Deploy to Production
+
+    needs: build
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: write
+
+    environment:
+      name: production
+
+    steps:
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Get current task definition
+        id: current-task
+        run: |
+          TASK_DEF=$(aws ecs describe-services \
+            --cluster $ECS_CLUSTER \
+            --services $ECS_SERVICE \
+            --query 'services[0].taskDefinition' \
+            --output text)
+
+          REVISION=${TASK_DEF##*:}
+
+          echo "task_definition=$TASK_DEF" >> $GITHUB_OUTPUT
+          echo "revision=$REVISION" >> $GITHUB_OUTPUT
+
+      - name: Download task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition $TASK_DEFINITION \
+            --query taskDefinition \
+            > task-definition.json
+
+      - name: Update task definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:v${{ inputs.version }}
+
+      - name: Deploy to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          service: ${{ env.ECS_SERVICE }}
+          wait-for-service-stability: true
+
+      - name: Get deployed task definition
+        id: deployed-task
+        run: |
+          TASK_DEF=$(aws ecs describe-services \
+            --cluster $ECS_CLUSTER \
+            --services $ECS_SERVICE \
+            --query 'services[0].taskDefinition' \
+            --output text)
+
+          REVISION=${TASK_DEF##*:}
+
+          echo "task_definition=$TASK_DEF" >> $GITHUB_OUTPUT
+          echo "revision=$REVISION" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create v${{ inputs.version }} \
+            --target main \
+            --title "Release v${{ inputs.version }}"
+
+      - name: Release Summary
+        run: |
+          echo "## 🚀 Production Release" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Semantic Version:** v${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image Tag:** ${{ inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Production Image:** ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:v${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Previous Revision:** ${{ steps.current-task.outputs.revision }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Current Revision:** ${{ steps.deployed-task.outputs.revision }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Cluster:** ${{ env.ECS_CLUSTER }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Service:** ${{ env.ECS_SERVICE }}" >> $GITHUB_STEP_SUMMARY
